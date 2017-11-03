@@ -33,7 +33,7 @@ class ConVoteExtractor(DataExtractor): #Used for congressional vote dataset
     def process(self):
         self.fileDict = {0: [], 1: []}
         for filename in os.listdir(self.filepath):
-            with open(self.filepath + '\\' + filename) as singleSpeech:
+            with open(self.filepath + '\\' + filename, 'r', encoding='utf-8') as singleSpeech:
                 if filename.split('.')[0].strip()[-1] == 'N':
                     self.fileDict[0].append(singleSpeech.read())
                 elif filename.split('.')[0].strip()[-1] == 'Y':
