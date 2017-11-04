@@ -6,17 +6,26 @@ from collections import namedtuple, OrderedDict
 from classifier.sentiment.classifiers import Classifier
 from sklearn.naive_bayes import GaussianNB
 from sklearn.linear_model import Perceptron
+import cProfile
+import time
 
 class NaiveBayes(Classifier):
     def __init__(self):
         pass
-    def summarize(self, separated_dataset):
+    def summarize(self, dataset):
         summaries = {}
-        for classValue, instances in separated_dataset.items():
-            npArr = np.array(instances)
-            means = npArr.mean(axis=0, dtype=np.float64)
-            stdevs = npArr.std(axis=0, dtype=np.float64)
-            summaries[classValue] = list(zip(means, stdevs))
+
+        separated = {}
+
+        for input in dataset:
+            if input[1] in separated:
+                separated[input[1]].append(list(input[0]))
+            else:
+                separated[input[1]] = [list(input[0])]
+
+        for classValue in separated.keys():
+            summaries[classValue] = [(np.mean(attribute), np.std(attribute)) for attribute in zip(*separated[classValue])]
+
         return summaries
 
     def probability(self, x, mean, stdev):
@@ -47,42 +56,35 @@ class NaiveBayes(Classifier):
 
         analyzedDocument = namedtuple('AnalyzedDocument', 'words tags')
         self.docs = []
-        values = list(conEx.process().values())
-        combined = values[0] + values[1]
+        values = conEx.process()
 
-        for i, text in enumerate(combined):
+
+        for i, text in enumerate(values[:,0]):
             words = text.lower().split()
             tags = [i]
             self.docs.append(analyzedDocument(words, tags))
 
-        self.model = Doc2Vec(dm=0, size=100, window=10, min_count=5, workers=4, iter=5)
+        self.model = Doc2Vec(dm=0, size=100, window=10, min_count=5, workers=4, iter=10)
         self.model.build_vocab(self.docs)
         self.model.train(self.docs, total_examples=2740, epochs=self.model.iter)
+        newValues = []
+        for input in values:
+            tokens = input[0].lower().split()
+            fv = np.array(self.model.infer_vector(tokens), dtype='float64')
+            newValues.append(np.array([fv, input[1]]))
 
-        len1 = len(values[0])
-        len2 = len(values[1])
-
-        sepVecs = {0:[], 1:[]}
-        for i in range(0, len1 + len2):
-            if i < len(values[0]):
-                sepVecs[0].append(self.model.docvecs[i])
-            else:
-                sepVecs[1].append(self.model.docvecs[i])
-        return sepVecs
-
+        return np.array(newValues)
 
     def getTestInputVectors(self):
         conEx = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\raw\\convote_v1.1\\data_stage_three\\test_set')
 
-        values = list(conEx.process().values())
-        sepArrs = []
-        for i in values[0]:
-            sepArrs.append([self.model.infer_vector(i), 0])
+        values = conEx.process()
 
-        for i in values[1]:
-            sepArrs.append([self.model.infer_vector(i), 1])
+        newValues = []
+        for [sentence, value] in values:
+            newValues.append([self.model.infer_vector(sentence.lower().split()), value])
 
-        return sepArrs
+        return np.array(newValues)
 
     def giveProbs(self, summaries, sentence):
         return self.calcLogClassProbabilities(summaries, self.model.infer_vector(sentence))
@@ -98,19 +100,54 @@ class NaiveBayes(Classifier):
         correct = 0.
         for i in testArrs:
             total += 1.
+
             if(self.test(i)):
                 correct += 1.
+
         return correct/total
 
     def predict(self, summaries, sentence):
         logprobs = self.calcLogClassProbabilities(summaries, sentence)
-        return np.argmax(logprobs)
+        currentHighestKey = 0
+        currentHighestProb = float("-inf")
+        for key in logprobs.keys():
+            if logprobs[key] > currentHighestProb:
+                currentHighestProb = logprobs[key]
+                currentHighestKey = key
+        return currentHighestKey
+
+
+def BoWStruct(dataset):
+    tokens = OrderedDict()
+    for sentences in dataset:
+        s_tokens = sentences.split()
+        for t in s_tokens:
+            if not t in tokens:
+                tokens[t] = 0
+    return tokens
+CE = conEx = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\raw\\convote_v1.1\\data_stage_three\\training_set')
+values = CE.process()
+tokens = BoWStruct(values[:,0])
+print(len(tokens))
+
+
+
+def getVector(sentence):
+    v = np.zeros(len(tokens) + 1)
+    for t in sentence.split():
+        if t in tokens:
+            v[list(tokens.keys()).index(t)] += 1
+        else:
+            v[-1] += 1
+    return v.tolist()
 
 
 nb = NaiveBayes()
 nb.train(nb.getTrainInputVectors())
-print('Accuracy: ', nb.testBatch(nb.getTestInputVectors()))
-
+test = nb.getTestInputVectors()
+currTime = time.time()
+print('Accuracy: ', nb.testBatch(test))
+print('Test Time: ', time.time() - currTime)
 '''
 
 ===================================
@@ -118,23 +155,15 @@ Test against SKLearn's classifiers
 ===================================
 
 '''
-data = nb.model.docvecs
-newOnes = np.zeros(len(data))
-temp = nb.getTrainInputVectors()
-for i in range(len(temp[0]), len(temp[1])):
-    newOnes[i] = 1
-testData = list(zip(*(nb.getTestInputVectors())))
-
+trainSet = nb.getTrainInputVectors()
 
 gnb = GaussianNB()
-gnb.fit(data, newOnes)
-print('SKL Gaussian NB score: ', gnb.score(testData[0], testData[1]))
+gnb.fit(list(trainSet[:,0]), trainSet[:,1])
+print('SKL Gaussian NB score: ', gnb.score(list(test[:,0]), test[:,1]))
 
 perc = Perceptron(max_iter=1000)
-perc.fit(data, newOnes)
-print('SKL Perceptron score: ', perc.score(testData[0], testData[1]))
-
-
+perc.fit(list(trainSet[:,0]), trainSet[:,1])
+print('SKL Perceptron score: ', perc.score(list(test[:,0]), test[:,1]))
 
 
 """
@@ -161,31 +190,3 @@ print('SKL Perceptron score: ', perc.score(testData[0], testData[1]))
     print(gnb.predict_proba([data[2506]]), nb.docs[2507])
     print('News Twitter: ', gnb.predict_proba([nb.model.infer_vector('The European Parliament has warned that " hostile propaganda " by Russia against the EU is growing'.lower())]))
 """
-
-dataset = [
-    'i have a big cat .',
-    'my cat is very big .',
-    'dogs are quite nice , i enjoy spending time with them !'
-]
-
-def BoWStruct(dataset):
-    tokens = OrderedDict()
-    for sentences in dataset:
-        s_tokens = sentences.split()
-        for t in s_tokens:
-            if t in tokens:
-                tokens[t] += 1
-            else:
-                tokens[t] = 1
-    return tokens
-
-tokens = BoWStruct(dataset)
-
-def getVector(sentence):
-    v = np.zeros(len(tokens) + 1)
-    for t in sentence.split():
-        if t in tokens:
-            v[list(tokens.keys()).index(t)] += 1
-        else:
-            v[-1] += 1
-    return v.tolist()
