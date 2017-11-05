@@ -125,7 +125,7 @@ def BoWStruct(dataset):
             if not t in tokens:
                 tokens[t] = 0
     return tokens
-CE = conEx = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\raw\\convote_v1.1\\data_stage_three\\training_set')
+CE = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\raw\\convote_v1.1\\data_stage_three\\training_set')
 values = CE.process()
 tokens = BoWStruct(values[:,0])
 print(len(tokens))
