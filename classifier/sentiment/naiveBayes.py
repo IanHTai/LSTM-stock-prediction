@@ -4,12 +4,13 @@ from dataExtract.dataExtractor import *
 from gensim.models.doc2vec import Doc2Vec
 from collections import namedtuple, OrderedDict
 from classifier.sentiment.classifiers import Classifier
-from sklearn.naive_bayes import GaussianNB
+from sklearn.naive_bayes import GaussianNB, MultinomialNB
 from sklearn.linear_model import Perceptron
 import cProfile
 import time
 
-class NaiveBayes(Classifier):
+class GaussianNaiveBayes(Classifier):
+    counts = {}
     def __init__(self):
         pass
     def summarize(self, dataset):
@@ -24,6 +25,7 @@ class NaiveBayes(Classifier):
                 separated[input[1]] = [list(input[0])]
 
         for classValue in separated.keys():
+            self.counts[classValue] = len(separated[classValue])
             summaries[classValue] = [(np.mean(attribute), np.std(attribute)) for attribute in zip(*separated[classValue])]
 
         return summaries
@@ -34,7 +36,7 @@ class NaiveBayes(Classifier):
     def calcLogClassProbabilities(self, summaries, inputVector):
         probabilities = {}
         for classValue, classSummaries in summaries.items():
-            probabilities[classValue] = 0
+            probabilities[classValue] = np.log(self.counts[classValue]/float(np.sum(list(self.counts.values()))))
             for i in range(len(classSummaries)):
                 mean, stdev = classSummaries[i]
                 x = inputVector[i]
@@ -108,15 +110,40 @@ class NaiveBayes(Classifier):
 
     def predict(self, summaries, sentence):
         logprobs = self.calcLogClassProbabilities(summaries, sentence)
-        currentHighestKey = 0
-        currentHighestProb = float("-inf")
-        for key in logprobs.keys():
-            if logprobs[key] > currentHighestProb:
-                currentHighestProb = logprobs[key]
-                currentHighestKey = key
-        return currentHighestKey
+        return np.argmax(list(logprobs.values()))
 
+class NaiveBayes(GaussianNaiveBayes):
+    def summarize(self, dataset):
+        separated = {}
 
+        for input in dataset:
+            if input[1] in separated:
+                separated[input[1]].append(list(input[0]))
+            else:
+                separated[input[1]] = [list(input[0])]
+        condProbs = {}
+        for classValue in separated.keys():
+            self.counts[classValue] = len(separated[classValue])
+            totalCountVector = np.sum(separated[classValue], axis=0)
+            addOne = np.full((totalCountVector.size), 1)
+            np.add(totalCountVector, addOne, totalCountVector)
+            classCondProbs = []
+            for feature in totalCountVector:
+                classCondProbs.append(feature/float(np.sum(totalCountVector) - feature))
+            condProbs[classValue] = classCondProbs
+        self.summaries = condProbs
+        return self.summaries
+
+    def calcLogClassProbabilities(self, summaries, inputVector):
+        probabilities = {}
+        for classValue in summaries:
+            probabilities[classValue] = np.log(self.counts[classValue]/float(np.sum(list(self.counts.values()))))
+            position = 0
+            for feature in (inputVector):
+                for i in range(feature):
+                    probabilities[classValue] += np.log(summaries[classValue][position])
+                position += 1
+        return probabilities
 def BoWStruct(dataset):
     tokens = OrderedDict()
     for sentences in dataset:
@@ -125,24 +152,57 @@ def BoWStruct(dataset):
             if not t in tokens:
                 tokens[t] = 0
     return tokens
-CE = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\raw\\convote_v1.1\\data_stage_three\\training_set')
-values = CE.process()
-tokens = BoWStruct(values[:,0])
-print(len(tokens))
+
+def getVector(sentence, struct):
+    v = struct
+    for word in sentence.split():
+        if word in v:
+            v[word] += 1
+    return list(v.values())
+
+def getConVoteData(train=True):
+    tokens = {}
+    if(train):
+        CE = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\raw\\convote_v1.1\\data_stage_three\\training_set')
+        values = CE.process()
+        tokens = BoWStruct(values[:, 0])
+    else:
+        CE = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\raw\\convote_v1.1\\data_stage_three\\test_set')
+        values = CE.process()
+    return values,tokens
+
+'''
+===================================
+Bag of Words
+===================================
+'''
+print('Getting BoW Train Data')
+trainValues, structure = getConVoteData(train=True)
+trainFV = []
+for [sentence, value] in trainValues:
+    trainFV.append([getVector(sentence, structure), value])
+trainFV = np.array(trainFV)
+print('Training BoW')
+BoWNB = NaiveBayes()
+BoWNB.train(trainFV)
+testValues, emptyStruct = getConVoteData(train=False)
+print('Getting BoW Test Data')
+testFV = []
+for [sentence, value] in testValues:
+    testFV.append([getVector(sentence, structure), value])
+testFV = np.array(testFV)
+print('Testing BoW')
+print('BoW Accuracy: ', BoWNB.testBatch(testFV))
 
 
 
-def getVector(sentence):
-    v = np.zeros(len(tokens) + 1)
-    for t in sentence.split():
-        if t in tokens:
-            v[list(tokens.keys()).index(t)] += 1
-        else:
-            v[-1] += 1
-    return v.tolist()
 
-
-nb = NaiveBayes()
+'''
+===================================
+Doc2Vec
+===================================
+'''
+nb = GaussianNaiveBayes()
 nb.train(nb.getTrainInputVectors())
 test = nb.getTestInputVectors()
 currTime = time.time()
