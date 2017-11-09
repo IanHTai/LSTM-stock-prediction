@@ -12,8 +12,8 @@ from dataExtract.dataExtractor import *
 #
 #
 """
-
-
+print(re.sub('\s(?=[^i]\'\S+)', '', "look at all of these i've should n't would n't shoul d've"))
+'''
 conEx = ConVoteExtractor()
 
 analyzedDocument = namedtuple('AnalyzedDocument', 'words tags')
@@ -29,7 +29,7 @@ for i, text in enumerate(combined):
 model = Doc2Vec(size=100, window=10, min_count=5, workers=4, iter=5)
 model.build_vocab(docs)
 model.train(docs, total_examples=2740, epochs=model.iter)
-
+'''
 
 
 

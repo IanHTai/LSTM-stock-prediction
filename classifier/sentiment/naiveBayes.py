@@ -8,6 +8,7 @@ from sklearn.naive_bayes import GaussianNB, MultinomialNB
 from sklearn.linear_model import Perceptron
 import cProfile
 import time
+from copy import deepcopy
 
 class GaussianNaiveBayes(Classifier):
     counts = {}
@@ -54,7 +55,7 @@ class GaussianNaiveBayes(Classifier):
         return out
 
     def getTrainInputVectors(self):
-        conEx = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\raw\\convote_v1.1\\data_stage_three\\training_set')
+        conEx = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\processed\\convote\\train')
 
         analyzedDocument = namedtuple('AnalyzedDocument', 'words tags')
         self.docs = []
@@ -78,7 +79,7 @@ class GaussianNaiveBayes(Classifier):
         return np.array(newValues)
 
     def getTestInputVectors(self):
-        conEx = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\raw\\convote_v1.1\\data_stage_three\\test_set')
+        conEx = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\processed\\convote\\test')
 
         values = conEx.process()
 
@@ -110,9 +111,30 @@ class GaussianNaiveBayes(Classifier):
 
     def predict(self, summaries, sentence):
         logprobs = self.calcLogClassProbabilities(summaries, sentence)
-        return np.argmax(list(logprobs.values()))
+        return max(logprobs, key=logprobs.get)
 
 class NaiveBayes(GaussianNaiveBayes):
+    def predict(self, summaries, sentence):
+        logprobs = self.calcLogClassProbabilities(summaries, sentence)
+        return max(logprobs, key=logprobs.get)
+
+    def train(self, trainArr):
+        self.logsummaries = self.summarize(trainArr)
+
+    def test(self, testArr):
+        return str((self.predict(self.logsummaries, testArr[0]))) == testArr[1]
+
+    def testBatch(self, testArrs):
+        total = 0.
+        correct = 0.
+        for i in testArrs:
+            total += 1.
+
+            if(self.test(i)):
+                correct += 1.
+
+        return correct/total
+
     def summarize(self, dataset):
         separated = {}
 
@@ -132,17 +154,16 @@ class NaiveBayes(GaussianNaiveBayes):
                 classCondProbs.append(feature/float(np.sum(totalCountVector) - feature))
             condProbs[classValue] = classCondProbs
         self.summaries = condProbs
-        return self.summaries
+        self.logsummaries = {}
+        for key in condProbs.keys():
+            self.logsummaries[key] = np.log(condProbs[key])
+        return self.logsummaries
 
     def calcLogClassProbabilities(self, summaries, inputVector):
         probabilities = {}
         for classValue in summaries:
-            probabilities[classValue] = np.log(self.counts[classValue]/float(np.sum(list(self.counts.values()))))
-            position = 0
-            for feature in (inputVector):
-                for i in range(feature):
-                    probabilities[classValue] += np.log(summaries[classValue][position])
-                position += 1
+            prior = np.log(self.counts[classValue]/float(np.sum(list(self.counts.values()))))
+            probabilities[classValue] = prior + np.dot(inputVector,summaries[classValue])
         return probabilities
 def BoWStruct(dataset):
     tokens = OrderedDict()
@@ -154,99 +175,78 @@ def BoWStruct(dataset):
     return tokens
 
 def getVector(sentence, struct):
-    v = struct
+    v = np.zeros(len(struct))
+    keysList = list(struct.keys())
     for word in sentence.split():
-        if word in v:
-            v[word] += 1
-    return list(v.values())
+        if word in struct:
+            v[keysList.index(word)] += 1
+    return v
 
 def getConVoteData(train=True):
     tokens = {}
     if(train):
-        CE = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\raw\\convote_v1.1\\data_stage_three\\training_set')
+        CE = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\processed\\convote\\train')
         values = CE.process()
         tokens = BoWStruct(values[:, 0])
     else:
-        CE = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\raw\\convote_v1.1\\data_stage_three\\test_set')
+        CE = ConVoteExtractor(os.getcwd() + '\\..\\..\\resources\\processed\\convote\\test')
         values = CE.process()
     return values,tokens
 
-'''
-===================================
-Bag of Words
-===================================
-'''
-print('Getting BoW Train Data')
-trainValues, structure = getConVoteData(train=True)
-trainFV = []
-for [sentence, value] in trainValues:
-    trainFV.append([getVector(sentence, structure), value])
-trainFV = np.array(trainFV)
-print('Training BoW')
-BoWNB = NaiveBayes()
-BoWNB.train(trainFV)
-testValues, emptyStruct = getConVoteData(train=False)
-print('Getting BoW Test Data')
-testFV = []
-for [sentence, value] in testValues:
-    testFV.append([getVector(sentence, structure), value])
-testFV = np.array(testFV)
-print('Testing BoW')
-print('BoW Accuracy: ', BoWNB.testBatch(testFV))
+if __name__ == '__main__':
+    '''
+    ===================================
+    Bag of Words
+    ===================================
+    '''
+    print('Getting BoW Train Data')
+    trainValues, structure = getConVoteData(train=True)
+    trainFV = []
+    for [sentence, value] in trainValues:
+        trainFV.append([getVector(sentence, structure), value])
+    trainFV = np.array(trainFV)
+    print('Training BoW')
+    BoWNB = NaiveBayes()
+    BoWNB.train(trainFV)
+    testValues, emptyStruct = getConVoteData(train=False)
+    print('Getting BoW Test Data')
+    testFV = []
+    for [sentence, value] in testValues:
+        testFV.append([getVector(sentence, structure), value])
+    testFV = np.array(testFV)
+    print('Testing BoW')
+    print('BoW Accuracy: ', BoWNB.testBatch(testFV))
 
 
 
 
-'''
-===================================
-Doc2Vec
-===================================
-'''
-nb = GaussianNaiveBayes()
-nb.train(nb.getTrainInputVectors())
-test = nb.getTestInputVectors()
-currTime = time.time()
-print('Accuracy: ', nb.testBatch(test))
-print('Test Time: ', time.time() - currTime)
-'''
-
-===================================
-Test against SKLearn's classifiers
-===================================
-
-'''
-trainSet = nb.getTrainInputVectors()
-
-gnb = GaussianNB()
-gnb.fit(list(trainSet[:,0]), trainSet[:,1])
-print('SKL Gaussian NB score: ', gnb.score(list(test[:,0]), test[:,1]))
-
-perc = Perceptron(max_iter=1000)
-perc.fit(list(trainSet[:,0]), trainSet[:,1])
-print('SKL Perceptron score: ', perc.score(list(test[:,0]), test[:,1]))
-
-
-"""
-    print(nb.calcScaledClassProbs(nb.calcLogClassProbabilities(nb.summaries, nb.model.docvecs[50])))
-    print(nb.calcScaledClassProbs(nb.calcLogClassProbabilities(nb.summaries, nb.model.docvecs[2500])))
-    #print(nb.model.docvecs[50], nb.model.docvecs[2500])
-
-    print('\n\n')
-    print(gnb.predict_proba([data[50]]), nb.docs[50])
-    print(gnb.predict_proba([data[51]]), nb.docs[51])
-    print(gnb.predict_proba([data[52]]), nb.docs[52])
-    print(gnb.predict_proba([data[53]]), nb.docs[53])
-    print(gnb.predict_proba([data[54]]), nb.docs[54])
-    print(gnb.predict_proba([data[55]]), nb.docs[55])
+    '''
+    ===================================
+    Doc2Vec
+    ===================================
+    '''
+    print('Getting Doc2Vec Train Data')
+    nb = GaussianNaiveBayes()
+    print('Training Doc2Vec NB')
+    nb.train(nb.getTrainInputVectors())
+    print('Getting Doc2Vec Test Data')
+    test = nb.getTestInputVectors()
+    currTime = time.time()
+    print('Testing Doc2Vec')
+    print('Accuracy: ', nb.testBatch(test))
+    '''
     
+    ===================================
+    Test against SKLearn's classifiers
+    ===================================
     
-    
-    print(gnb.predict_proba([data[2500]]), nb.docs[2501])
-    print(gnb.predict_proba([data[2501]]), nb.docs[2502])
-    print(gnb.predict_proba([data[2502]]), nb.docs[2503])
-    print(gnb.predict_proba([data[2503]]), nb.docs[2504])
-    print(gnb.predict_proba([data[2504]]), nb.docs[2505])
-    print(gnb.predict_proba([data[2505]]), nb.docs[2506])
-    print(gnb.predict_proba([data[2506]]), nb.docs[2507])
-    print('News Twitter: ', gnb.predict_proba([nb.model.infer_vector('The European Parliament has warned that " hostile propaganda " by Russia against the EU is growing'.lower())]))
-"""
+    '''
+    trainSet = nb.getTrainInputVectors()
+
+    gnb = GaussianNB()
+    gnb.fit(list(trainSet[:,0]), trainSet[:,1])
+    print('SKL Gaussian NB score: ', gnb.score(list(test[:,0]), test[:,1]))
+
+    perc = Perceptron(max_iter=1000)
+    perc.fit(list(trainSet[:,0]), trainSet[:,1])
+    print('SKL Perceptron score: ', perc.score(list(test[:,0]), test[:,1]))

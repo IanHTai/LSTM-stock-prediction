@@ -12,7 +12,7 @@ from datetime import datetime
 import sys
 
 
-start = 1483000 #Input this every time
+start = 2238300 #Input this every time
 
 
 filterList = [
@@ -100,8 +100,12 @@ class multiStatusTwitter(twitter.Api):
             'include_entities': enf_type('include_entities', bool, include_entities),
             'include_ext_alt_text': enf_type('include_ext_alt_text', bool, include_ext_alt_text)
         }
-
-        resp = self._RequestUrl(url, 'GET', data=parameters)
+        try:
+            resp = self._RequestUrl(url, 'GET', data=parameters)
+        except TimeoutError:
+            time.sleep(60)
+            return self.getMultiStatus(status_ids, trim_user, include_my_retweet, include_entities,
+                                       include_ext_alt_text)
         if resp.status_code == 200:
             data = self._ParseAndCheckTwitter(resp.content.decode('utf-8'))
             if 'x-rate-limit-remaining' in resp.headers._store:
