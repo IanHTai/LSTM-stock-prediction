@@ -47,6 +47,14 @@ usernames = [
     'arstechnica',
 ]
 
+numColumns_labelled = 4
+
+translateDict = {
+    '-1':'neg',
+    '0':'neutral',
+    '1':'pos'
+}
+
 ascii = set(string.printable)
 
 
@@ -138,5 +146,26 @@ def filterSubSample(fileName, outFileName):
             for line in unFil:
                 if(len(line.split('\t')) > 3):
                     fil.write(line)
+
+
+
+def combineData(labelledPath, unlabelledPath, outPath):
+    with open(labelledPath, 'r') as labelled:
+        with open(unlabelledPath, 'r') as unlabelled:
+            with open(outPath, 'w') as out:
+                for line in labelled:
+                    splitLine = line.rstrip().split('\t')
+                    if(len(splitLine) == numColumns_labelled):
+                        splitLine[3] = translateDict[splitLine[3]]
+                        writeLine = '\t'.join(splitLine)
+                        out.write(writeLine)
+                        out.write('\n')
+                    else:
+                        out.write(line.rstrip())
+                        out.write('\t-1\n')
+                for line in unlabelled:
+                    out.write(line.rstrip())
+                    out.write('\t-1\n')
+    return outPath
 if __name__ == '__main__':
-    filterSubSample('../resources/hydrated_tweets/Subsampled_TwitterData_v3.txt', '../resources/hydrated_tweets/FilteredSubsampled_TwitterData_v3.txt')
+    combineData('../resources/hydrated_tweets/FilteredSubsampled_TwitterData_v3.txt', '../resources/hydrated_tweets/TwitterData_v3.txt', '../resources/hydrated_tweets/Combined_TwitterData_v3.txt')
