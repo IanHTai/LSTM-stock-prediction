@@ -9,6 +9,7 @@ from sklearn.linear_model import Perceptron
 import cProfile
 import time
 from copy import deepcopy
+import nltk
 
 class GaussianNaiveBayes(Classifier):
     counts = {}

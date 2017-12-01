@@ -137,15 +137,10 @@ def subSample(desiredNum, inFileName, outFileName):
     with open(outFileName, 'w') as subFile:
         with open(inFileName, 'r') as readFile:
             for line in readFile:
-                if(random.random() <= ratio):
-                    subFile.write(line)
+                if len(line.split('\t')) > 2:
+                    if random.random() <= ratio:
+                        subFile.write(line)
 
-def filterSubSample(fileName, outFileName):
-    with open(fileName, 'r') as unFil:
-        with open(outFileName, 'w') as fil:
-            for line in unFil:
-                if(len(line.split('\t')) > 3):
-                    fil.write(line)
 
 
 
@@ -168,4 +163,8 @@ def combineData(labelledPath, unlabelledPath, outPath):
                     out.write('\t-1\n')
     return outPath
 if __name__ == '__main__':
-    combineData('../resources/hydrated_tweets/FilteredSubsampled_TwitterData_v3.txt', '../resources/hydrated_tweets/TwitterData_v3.txt', '../resources/hydrated_tweets/Combined_TwitterData_v3.txt')
+    '''subFileName = '../resources/hydrated_tweets/small_data/Subsampled_Dev.txt'
+    subSample(5000, '../resources/hydrated_tweets/TwitterData_v3.txt', subFileName)
+
+    combineData('../resources/hydrated_tweets/FilteredSubsampled_TwitterData_v3.txt', subFileName, '../resources/hydrated_tweets/small_data/Combined_subsampled_Dev.txt')'''
+    subSample(100, '../resources/hydrated_tweets/TwitterData_v3.txt', '../resources/hydrated_tweets/small_data/Test_Dev.txt')
