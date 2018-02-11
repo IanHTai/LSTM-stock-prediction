@@ -4,6 +4,10 @@ import os
 import numpy as np
 import re
 import pandas as pd
+import pickle
+from datetime import datetime
+from datetime import timedelta
+import math
 
 
 class DataExtractor(ABC):
@@ -81,10 +85,52 @@ class RTPolarityExtractor(DataExtractor): #Used for the RT-PolarityData set
                 raise FileNotFoundError()
         return np.array(self.fileArr)
 
-def GoogleFinExtract(stockNames):
-    for i in stockNames:
-        data = pd.read_csv('http://www.google.com/finance/getprices?i=300&p=100d&f=d,o,h,l,c,v&df=cpct&q=' + i, skiprows=8, header=None)
-        print(data.head())
+class FinExtractor:
+    _pickleL = '../resources/processed/Pickle_NASDAQ.p'
+    def FinFormat(self, filename):
+        """
+        Used to remove spaces from excel file and wrote to CSV
+        :param filename:
+        :return:
+        """
+        df = pd.read_excel(filename)
+        df1 = df.dropna(axis=1, how='all')
+        newFP = os.path.split(filename)[0] + '/CSV_NASDAQ.csv'
+        df1.to_csv(path_or_buf=newFP)
 
-if __name__ == '__main__':
-    GoogleFinExtract(['AAPL'])
+
+    def FinExtractAndPickle(self, filename, pickleLoc):
+        """
+        Turn into MultiIndex form after manual (scripted) tampering in CSV format, then store in pickle form
+        :param filename:
+        :return:
+        """
+        df = pd.read_csv(filename, float_precision='high', header=[0,1,2])
+
+        #print(df.loc[(slice(None), slice(None)), 'Date'])
+        pickle.dump(df, open(pickleLoc, 'wb'))
+
+    def FinConvExtractfromPickle(self, pickleLoc):
+        """
+        Was useful for not having to load in the csv file every time to bugfix the dataframe
+        :param pickleLoc:
+        :return: dataframe of financial data
+        """
+        df = pickle.load(open(pickleLoc, 'rb'))
+        levels = df.dtypes.index.levels
+        for l1 in levels[0]:
+            for l2 in levels[1]:
+                df[l1, l2, 'Date'] = df[l1,l2,'Date'].apply(ConvertExcelTime, convert_dtype=True)
+        convertedLoc = os.path.splitext(pickleLoc)[0] + '_convertedDate.p'
+        pickle.dump(df, open(convertedLoc, 'wb'))
+        return convertedLoc
+
+    def ConvertExcelTime(self, days):
+        if(math.isnan(days)):
+            return math.nan
+        dt = datetime.fromordinal(datetime(1900, 1, 1).toordinal() + math.floor(days) - 2)
+        dec = days % 1
+        return dt + timedelta(days=dec)
+
+    def FinExtractFromPickle(self, pickleLoc):
+        return pickle.load(open(pickleLoc, 'rb'))
