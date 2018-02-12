@@ -25,6 +25,24 @@ class LSTM_System:
     def convertStockNames(self, list):
         return [(s + ' UW Equity') for s in list]
 
+
+    # def get_state_update(self, stateVar, newStates):
+    #     # Operation to update state with last state's tensors
+    #     updateOps = []
+    #     print(stateVar)
+    #     for state_variable, new_state in zip(stateVar, newStates):
+    #         updateOps.extend([state_variable[0].assign(new_state[0]), state_variable[1].assign(new_state[1])])
+    #
+    #     return tf.tuple(updateOps)
+    #
+    # def set_state_zeros(self, states):
+    #     updateOps = []
+    #     for state_variable in states:
+    #         updateOps.extend([state_variable[0].assign(tf.zeros_like(state_variable[0])),
+    #                            state_variable[1].assign(tf.zeros_like(state_variable[1]))])
+    #
+    #     return tf.tuple(updateOps)
+
     def rnn(self, config):
         lstm_graph = tf.Graph()
         with lstm_graph.as_default():
@@ -34,27 +52,49 @@ class LSTM_System:
             inputs = tf.placeholder(tf.float32, [None, config.num_steps, config.input_size], name="inputs")
             targets = tf.placeholder(tf.float32, [None, config.output_size], name="targets")
 
-
             def _create_one_cell():
                 lstm_cell = tf.contrib.rnn.LSTMCell(config.lstm_size, state_is_tuple=True)
                 if config.keep_prob < 1.0:
                     lstm_cell = tf.contrib.rnn.DropoutWrapper(lstm_cell, output_keep_prob=config.keep_prob)
                 return lstm_cell
 
-            cell = tf.contrib.rnn.MultiRNNCell(
-                [_create_one_cell() for _ in range(config.num_layers)],
-                state_is_tuple=True
-            ) if config.num_layers > 1 else _create_one_cell()
-            outputs, _ = tf.nn.dynamic_rnn(cell, inputs, dtype=tf.float32, sequence_length=config.num_steps, initial_state=state)
-            print("outputs shape: ", outputs.get_shape)
+            if (config.num_layers > 1):
+                cell = tf.contrib.rnn.MultiRNNCell(
+                    [_create_one_cell() for _ in range(config.num_layers)],
+                    state_is_tuple=True
+                )
+            else:
+                cell = _create_one_cell()
+
+            init_state = tf.placeholder(tf.float32, [config.num_layers, 2, config.batch_size, config.lstm_size], name="init_state")
+            state_per_layer_list = tf.unstack(init_state, axis=0)
+
+            if(config.num_layers == 1):
+                rnn_tuple_state = tuple([tf.nn.rnn_cell.LSTMStateTuple(state_per_layer_list[0][0], state_per_layer_list[0][1])])
+                print(rnn_tuple_state)
+            else:
+                rnn_tuple_state = tuple(
+                    [tf.nn.rnn_cell.LSTMStateTuple(state_per_layer_list[i][0], state_per_layer_list[i][1])
+                     for i in range(config.num_layers)]
+                )
+
+            """
+            TODO:
+            ValueError, not enough values to unpack for num_layers = 1
+            """
+            outputs, self.current_state = tf.nn.dynamic_rnn(cell, inputs, dtype=tf.float32, initial_state=rnn_tuple_state)
+
             outputs = tf.transpose(outputs, [1,0,2])
+            print("outputs shape: ", outputs.get_shape)
 
             with tf.name_scope("output_layer"):
                 # last.get_shape() = (batch_size, lstm_size)
                 #last = tf.gather(outputs, int(outputs.get_shape()[0]) - 1, name="last_lstm_output")
 
                 weight = tf.Variable(tf.truncated_normal([config.lstm_size, config.output_size]), name="weights")
-                bias = tf.Variable(tf.constant(0.1, shape=[config.output_size]), name="biases")
+
+                #initialize bias as 1, as suggested in Jozefowicz, Zaremba, Sutskever (2015)
+                bias = tf.Variable(tf.constant(1.0, dtype=tf.float32, shape=[config.output_size]), name="biases")
                 prediction = tf.matmul(outputs[-1], weight) + bias
 
                 tf.summary.histogram("last_lstm_output", outputs[-1])
@@ -64,10 +104,10 @@ class LSTM_System:
             with tf.name_scope("train"):
                 # loss = -tf.reduce_sum(targets * tf.log(tf.clip_by_value(prediction, 1e-10, 1.0)))
                 #loss = tf.reduce_mean(tf.square(prediction - targets), name="loss_mse")
-                loss = tf.reduce_mean(tf.losses.huber_loss(labels=targets, predictions=prediction), name="loss_huber")
+                loss = tf.reduce_mean(tf.losses.mean_squared_error(labels=targets, predictions=prediction), name="loss_mse")
                 optimizer = tf.train.AdamOptimizer(learning_rate)
                 minimize = optimizer.minimize(loss, name="loss_mse_adam_minimize")
-                tf.summary.scalar("loss_huber", loss)
+                tf.summary.scalar("loss_mse", loss)
 
 
 
@@ -221,19 +261,28 @@ class LSTM_System:
     #     return input, labels
 
 
-    def generate_one_epoch(self, batch_size):
-        num_batches = int(len(self.train_X)) // batch_size
-        if batch_size * num_batches < len(self.train_X):
-            num_batches += 1
+    def generate_one_epoch(self, batch_size, train=True):
+        if(train):
+            num_batches = int(len(self.train_X)) // batch_size
+            if batch_size * num_batches < len(self.train_X):
+                num_batches += 1
+        else:
+            num_batches = int(len(self.test_X)) // batch_size
+            if batch_size * num_batches < len(self.test_X):
+                num_batches += 1
         batch_indices = list(range(num_batches))
 
         # random.shuffle(batch_indices)
         for j in batch_indices:
-            batch_X = self.train_X[j * batch_size: (j + 1) * batch_size]
-            batch_y = self.train_Y[j * batch_size: (j + 1) * batch_size]
-            #TODO: FIGURE THIS OUT
+            if (train):
+                batch_X = self.train_X[j * batch_size: (j + 1) * batch_size]
+                batch_y = self.train_Y[j * batch_size: (j + 1) * batch_size]
+            else:
+                batch_X = self.test_X[j * batch_size: (j + 1) * batch_size]
+                batch_y = self.test_Y[j * batch_size: (j + 1) * batch_size]
             #assert set(map(len, batch_X)) == {self.num_steps}
             yield batch_X, batch_y
+
 
     def _compute_learning_rates(self, config):
         learning_rates_to_use = [
@@ -270,8 +319,6 @@ class LSTM_System:
             # print(self.full)
         self.train_X, self.train_Y, self.test_X, self.test_Y = \
             self.prepare_inputs(config, np.array(self.full[:-1]), np.array(self.full[1:]))
-        final_prediction = []
-        final_loss = None
 
         graph_name = "%s_lr%.2f_lr_decay%.3f_lstm%d_step%d_input%d_batch%d_epoch%d" % (
             'MSFT',
@@ -290,14 +337,9 @@ class LSTM_System:
             inputs = graph.get_tensor_by_name('inputs:0')
             targets = graph.get_tensor_by_name('targets:0')
             learning_rate = graph.get_tensor_by_name('learning_rate:0')
+            init_state = graph.get_tensor_by_name('init_state:0')
 
-            test_data_feed = {
-                inputs: self.test_X,
-                targets: self.test_Y,
-                learning_rate: 0.0
-            }
-
-            loss = graph.get_tensor_by_name('train/loss_huber:0')
+            loss = graph.get_tensor_by_name('train/loss_mse:0')
             minimize = graph.get_operation_by_name('train/loss_mse_adam_minimize')
             prediction = graph.get_tensor_by_name('output_layer/add:0')
 
@@ -308,31 +350,51 @@ class LSTM_System:
                 current_lr = learning_rates_to_use[epoch_step]
                 train_losses = []
                 train_accuracies = []
+
+                # Reset initial state between epochs
+                _current_state = np.zeros((config.num_layers, 2, config.batch_size, config.lstm_size))
+
+
                 for batch_X, batch_y in self.generate_one_epoch(config.batch_size):
                     train_data_feed = {
                         inputs: batch_X,
                         targets: batch_y,
-                        learning_rate: current_lr
+                        learning_rate: current_lr,
+                        init_state: _current_state
                     }
-                    train_loss, _ = sess.run([loss, minimize], train_data_feed)
+
+                    train_loss, _, _current_state, train_pred = sess.run([loss, minimize, self.current_state, prediction], train_data_feed)
+
                     train_losses.append(train_loss)
+                    train_perf = self.calcPerformance(batch_y, train_pred, train=True)
+                    train_accuracies.append(float(train_perf[0])/float(train_perf[1]))
 
-                    train_data_feed[learning_rate] = 0.0
-                    train_pred = sess.run([prediction], train_data_feed)
-                    trainPerf = self.calcPerformance(batch_y, train_pred, train=True)
-                    train_accuracies.append(float(trainPerf[0])/float(trainPerf[1]))
+                test_losses = []
+                test_accuracies = []
+                test_preds = []
+                for batch_X, batch_y in self.generate_one_epoch(config.batch_size, train=False):
+                    test_data_feed = {
+                        inputs: batch_X,
+                        targets: batch_y,
+                        learning_rate: 0.0,
+                        init_state: _current_state
+                    }
 
+                    test_loss, _pred, _summary, test_state = sess.run([loss, prediction, merged_summary, self.current_state], test_data_feed)
+                    test_preds.append(_pred)
+                    test_losses.append(test_loss)
+                    test_perf = self.calcPerformance(batch_y, _pred, train=False)
+                    test_accuracies.append(float(test_perf[0])/float(test_perf[1]))
 
-                test_loss, _pred, _summary = sess.run([loss, prediction, merged_summary], test_data_feed)
-                assert len(_pred) == len(self.test_Y)
+                assert len(test_preds) == len(self.test_Y)
                 if epoch_step % 5 == 0:
-                    print("Epoch %d [%f]:" % (epoch_step, current_lr), test_loss, "mean train loss: ", np.mean(train_losses), "mean train accuracy: ", np.mean(train_accuracies))
+                    print("Epoch %d [%f]:" % (epoch_step, current_lr), "mean test loss: ", np.mean(test_losses),
+                          "mean train loss: ", np.mean(train_losses), "mean train accuracy: ", np.mean(train_accuracies))
                     if epoch_step% 10 == 0:
-                        performance = self.calcPerformance(self.test_Y, _pred)
                         print("Directional accuracy of predictions")
-                        print("NumCorrect: ", performance[0])
-                        print("Total: ", performance[1])
-                        print("Percentage: ", float(performance[0]) / float(performance[1]))
+                        print("NumCorrect: ", self.test_Y.shape[0]*np.mean(test_accuracies))
+                        print("Total: ", self.test_Y.shape[0])
+                        print("Percentage: ", np.mean(test_accuracies))
 
                         # print("Backtest starting with $10000", self.backTest(self.testPrices, _pred))
                     if epoch_step % 50 == 0:
@@ -358,10 +420,9 @@ class LSTM_System:
                 if(stopping_counter >= config.early_stopping_continue):
                     print("Early Stopping Activated")
                     break
-
-            final_prediction, final_loss = sess.run([prediction, loss], test_data_feed)
-            print("Final Loss: ", final_loss)
-            self.final_loss = final_loss
+            final_prediction = _pred
+            print("Final Loss: ", test_loss)
+            self.final_loss = test_loss
 
             timesteps = range(len(final_prediction))
 
@@ -408,10 +469,6 @@ class LSTM_System:
                 numCorrect += 1
         return numCorrect,totalPreds
         """
-        if(train):
-        # TEMP
-            actual = np.array(actual)
-            predicted = np.squeeze(np.array(predicted), axis=0)
 
         assert (predicted.shape == actual.shape)
         #Denormalization
@@ -598,7 +655,7 @@ class config:
     keep_prob = 0.85
     input_size = 8
     output_size = 1
-    batch_size = 160
+    batch_size = 1
     init_learning_rate = 0.001
     learning_rate_decay = 0.99
     lstm_size = 185
@@ -653,8 +710,8 @@ if __name__ == "__main__":
     #Random search
     for n in range(50):
         n = LSTM_System()
-        n.config.num_layers = np.random.choice(4, p=[0.5, 0.25, 0.125, 0.125]) + 1
-        n.config.batch_size = np.random.randint(1,300/n.config.num_layers)
+        n.config.num_layers = 2 #np.random.choice(4, p=[0.5, 0.25, 0.125, 0.125]) + 1
+        n.config.batch_size = 1 #np.random.randint(1,300/n.config.num_layers)
         #n.config.num_steps = np.random.randint(1,n.config.batch_size+1)
         n.config.keep_prob = np.random.uniform(0.3,1)
         n.config.lstm_size = np.random.randint(1, 512/n.config.num_layers)
