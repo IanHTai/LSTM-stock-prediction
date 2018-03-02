@@ -6,6 +6,7 @@ import pandas as pd
 import matplotlib.pyplot as mpl
 import random
 from sklearn import preprocessing
+from tensorflow.python.client import timeline
 
 class LSTM_System:
     #Currently top 5 market cap companies on nasdaq
@@ -104,10 +105,13 @@ class LSTM_System:
             with tf.name_scope("train"):
                 # loss = -tf.reduce_sum(targets * tf.log(tf.clip_by_value(prediction, 1e-10, 1.0)))
                 #loss = tf.reduce_mean(tf.square(prediction - targets), name="loss_mse")
-                loss = tf.reduce_mean(tf.losses.mean_squared_error(labels=targets, predictions=prediction), name="loss_mse")
+                if(config.huber):
+                    loss = tf.reduce_mean(tf.losses.huber_loss(labels=targets, predictions=prediction), name="loss_huber")
+                else:
+                    loss = tf.reduce_mean(tf.losses.mean_squared_error(labels=targets, predictions=prediction), name="loss_huber")
                 optimizer = tf.train.AdamOptimizer(learning_rate)
-                minimize = optimizer.minimize(loss, name="loss_mse_adam_minimize")
-                tf.summary.scalar("loss_mse", loss)
+                minimize = optimizer.minimize(loss, name="loss_huber_adam_minimize")
+                tf.summary.scalar("loss_huber", loss)
 
 
 
@@ -164,7 +168,7 @@ class LSTM_System:
             #diff = np.divide(np.diff(input), input[:-1])
 
             train_size = int(len(diff) * (config.test_train_split))
-            self.mean = np.mean(diff[:train_size])
+            self.mean = np.mean(diff[:train_size], axis=0)
             self.stdev = np.std(diff[:train_size])
             diff = diff - self.mean
             diff = diff / self.stdev
@@ -278,8 +282,11 @@ class LSTM_System:
                 batch_X = self.train_X[j * batch_size: (j + 1) * batch_size]
                 batch_y = self.train_Y[j * batch_size: (j + 1) * batch_size]
             else:
-                batch_X = self.test_X[j * batch_size: (j + 1) * batch_size]
-                batch_y = self.test_Y[j * batch_size: (j + 1) * batch_size]
+                if (batch_size > 1):
+                    yield self.test_X, self.test_Y
+                else:
+                    batch_X = self.test_X[j * batch_size: (j + 1) * batch_size]
+                    batch_y = self.test_Y[j * batch_size: (j + 1) * batch_size]
             #assert set(map(len, batch_X)) == {self.num_steps}
             yield batch_X, batch_y
 
@@ -304,16 +311,16 @@ class LSTM_System:
             df = np.delete(np.array(df), 0, axis=1)
 
             # IMPORTANT: REMOVE EVERY 2ND ROW
-            df = np.delete(df, list(range(0, df.shape[0], 2)), axis=0)
+            # df = np.delete(df, list(range(0, df.shape[0], 2)), axis=0)
 
             # REMOVE EVERY 2ND ROW AGAIN
-            df = np.delete(df, list(range(0, df.shape[0], 2)), axis=0)
+            # df = np.delete(df, list(range(0, df.shape[0], 2)), axis=0)
 
 
             stats_feat = self.statsFeatures(df, config)
             self.full = self.normPrice(stats_feat, self.config)
         else:
-            sinD = np.delete(np.array(sinData(8893)), 0, axis=1)
+            sinD = np.delete(np.array(sinData(1000)), 0, axis=1)
             stats_feat = self.statsFeatures(sinD, self.config)
             self.full = self.normPrice(stats_feat, self.config)
             # print(self.full)
@@ -339,12 +346,16 @@ class LSTM_System:
             learning_rate = graph.get_tensor_by_name('learning_rate:0')
             init_state = graph.get_tensor_by_name('init_state:0')
 
-            loss = graph.get_tensor_by_name('train/loss_mse:0')
-            minimize = graph.get_operation_by_name('train/loss_mse_adam_minimize')
+            loss = graph.get_tensor_by_name('train/loss_huber:0')
+            minimize = graph.get_operation_by_name('train/loss_huber_adam_minimize')
             prediction = graph.get_tensor_by_name('output_layer/add:0')
 
             min_valid_loss = np.inf
             stopping_counter = 0
+
+            end_epoch = config.max_epoch
+            print("train mean and stdev =", np.mean(self.train_Y), np.std(self.train_Y))
+            print('test mean and stdev =', np.mean(self.test_Y), np.std(self.test_Y))
 
             for epoch_step in range(config.max_epoch):
                 current_lr = learning_rates_to_use[epoch_step]
@@ -366,7 +377,7 @@ class LSTM_System:
                     train_loss, _, _current_state, train_pred = sess.run([loss, minimize, self.current_state, prediction], train_data_feed)
 
                     train_losses.append(train_loss)
-                    train_perf = self.calcPerformance(batch_y, train_pred, train=True)
+                    train_perf = self.calcPerformance(batch_y, train_pred, config, train=True)
                     train_accuracies.append(float(train_perf[0])/float(train_perf[1]))
 
                 test_losses = []
@@ -380,17 +391,33 @@ class LSTM_System:
                         init_state: _current_state
                     }
 
-                    test_loss, _pred, _summary, test_state = sess.run([loss, prediction, merged_summary, self.current_state], test_data_feed)
+                    test_loss, _pred, _summary, _current_state = sess.run(
+                        [loss, prediction, merged_summary, self.current_state], test_data_feed)
                     test_preds.append(_pred)
                     test_losses.append(test_loss)
-                    test_perf = self.calcPerformance(batch_y, _pred, train=False)
-                    test_accuracies.append(float(test_perf[0])/float(test_perf[1]))
+                    test_perf = self.calcPerformance(batch_y, _pred, config, train=False)
+                    test_accuracies.append(float(test_perf[0]) / float(test_perf[1]))
 
-                assert len(test_preds) == len(self.test_Y)
                 if epoch_step % 5 == 0:
+
+                    assert len(test_preds) == len(self.test_Y)
                     print("Epoch %d [%f]:" % (epoch_step, current_lr), "mean test loss: ", np.mean(test_losses),
                           "mean train loss: ", np.mean(train_losses), "mean train accuracy: ", np.mean(train_accuracies))
                     if epoch_step% 10 == 0:
+                        # timesteps = range(len(test_preds))
+                        # mpl.plot(timesteps, self.test_Y, label='data')
+                        # mpl.plot(timesteps, np.squeeze(test_preds), label='predict')
+                        # mpl.xlabel('Time')
+                        # mpl.ylabel('Normalized price change')
+                        # mpl.legend()
+                        # fig1 = mpl.gcf()
+                        # # mpl.show()
+                        # mpl.draw()
+                        # fig1.savefig(str(epoch_step) + 'sinData_run1_percent_change.png')
+                        # mpl.gcf().clear()
+                        # mpl.close()
+
+
                         print("Directional accuracy of predictions")
                         print("NumCorrect: ", self.test_Y.shape[0]*np.mean(test_accuracies))
                         print("Total: ", self.test_Y.shape[0])
@@ -411,6 +438,12 @@ class LSTM_System:
                 """
                 Early Stopping
                 """
+
+                # if(np.mean(test_accuracies) > 0.7):
+                #     print("Early Stopping from Significant Accuracy")
+                #     end_epoch = epoch_step
+                #     break
+
                 if(test_loss < min_valid_loss):
                     stopping_counter = 0
                     min_valid_loss = test_loss
@@ -419,14 +452,16 @@ class LSTM_System:
                     #print("Possible Early Stopping: Epoch ", epoch_step, ". Min: ", min_valid_loss, ". Current: ", test_loss)
                 if(stopping_counter >= config.early_stopping_continue):
                     print("Early Stopping Activated")
+                    end_epoch = epoch_step
                     break
-            final_prediction = _pred
-            print("Final Loss: ", test_loss)
+            final_prediction = np.squeeze(test_preds)
+            print("Final Loss: ", np.mean(test_losses))
             self.final_loss = test_loss
 
             timesteps = range(len(final_prediction))
 
             mpl.plot(timesteps, self.test_Y, label='data')
+
             mpl.plot(timesteps, final_prediction, label='predict')
             mpl.xlabel('Time')
             mpl.ylabel('Normalized price change')
@@ -434,15 +469,19 @@ class LSTM_System:
             fig1 = mpl.gcf()
             # mpl.show()
             # mpl.draw()
-            fig1.savefig(str(config.batch_size) + '_' + str(config.num_steps) + 'run1_nonPercentChange.png')
+            fig1.savefig(str(config.init_learning_rate) + "_" + str(end_epoch) + "_" +
+                         str(np.mean(test_accuracies)) + "_" + str(n.config.williams_period) + "_" +
+                         str(n.config.avgAlpha) + "_" + str(n.config.learning_rate_decay) +
+                         "_run1_" + config.stock + "_20min_sinData.png", dpi=1200)
+            mpl.gcf().clear()
+            mpl.close()
 
-            performance = self.calcPerformance(self.test_Y, final_prediction)
             print("Directional accuracy of predictions")
-            print("NumCorrect: ", performance[0])
-            print("Total: ", performance[1])
-            print("Percentage: ", float(performance[0])/float(performance[1]))
+            print("NumCorrect: ", self.test_Y.shape[0] * np.mean(test_accuracies))
+            print("Total: ", self.test_Y.shape[0])
+            print("Percentage: ", np.mean(test_accuracies))
 
-            self.performance = float(performance[0])/float(performance[1])
+            self.performance = np.mean(test_accuracies)
 
             #  print("Backtest starting with $10000", self.backTest(self.testPrices, _pred))
 
@@ -457,7 +496,7 @@ class LSTM_System:
         with open("final_predictions.{}.json".format(graph_name), 'w') as fout:
             fout.write(json.dumps(final_prediction.tolist()))"""
 
-    def calcPerformance(self, actual, predicted, train=False):
+    def calcPerformance(self, actual, predicted, config, train=False):
         # print(output)
         # Outdated code for when inputs were percentage change
         """
@@ -518,12 +557,15 @@ class LSTM_System:
 
         last = actual[0]
         for i in range(len(actual)):
-            # if (np.sign(predicted[i] - last) == np.sign(actual[i] - last)):
-            #     numCorrect += 1
-            if(np.sign(predicted[i] - np.float32(1)) == np.sign(actual[i] - np.float32(1))):
-                numCorrect += 1
-            elif(np.sign(predicted[i] - np.float(1)) == 0):
-                numCorrect += 0.5
+
+            if(config.sin_data == True):
+                if(np.sign(predicted[i]) == np.sign(actual[i])):
+                    numCorrect += 1
+            else:
+                if(np.sign(predicted[i] - np.float32(1)) == np.sign(actual[i] - np.float32(1))):
+                    numCorrect += 1
+                elif(np.sign(predicted[i] - np.float(1)) == 0):
+                    numCorrect += 0.5
             # else:
             #     print('WRONG', predicted[i], actual[i])
             # profit += np.sign(predicted[i] - last)*(actual[i] - last)
@@ -542,7 +584,7 @@ class LSTM_System:
         upChangeAvg = 0
         downChangeAvg = 0
 
-        alpha = 0.2
+
         lastPrice = input[0,0]
         priceAvg = input[0,0]
 
@@ -557,7 +599,7 @@ class LSTM_System:
                 highest = input[0,0]
                 lowest = input[0,0]
                 slow_williamsR.append(np.float32(-0.5))
-            elif(i < config.williams_period):
+            elif(i <= config.williams_period):
                 highest = np.amax(input[:i+1,0])
                 lowest = np.amin(input[:i+1,0])
                 slow_williamsR.append(-1. * (highest - input[i, 0]) / (highest - lowest))
@@ -584,7 +626,7 @@ class LSTM_System:
                 highest = input[0, 0]
                 lowest = input[0, 0]
                 fast_williamsR.append(np.float32(-0.5))
-            elif (i < (config.williams_period/2)):
+            elif (i <= (config.williams_period/2)):
                 highest = np.amax(input[:i+1, 0])
                 lowest = np.amin(input[:i+1, 0])
                 fast_williamsR.append(-1. * (highest - input[i, 0]) / (highest - lowest))
@@ -594,11 +636,11 @@ class LSTM_System:
                 fast_williamsR.append(-1. * (highest - input[i, 0]) / (highest - lowest))
 
             if(input[i,0] > lastPrice):
-                upChangeAvg = (alpha*(input[i,0]-lastPrice)) + (1-alpha)*upChangeAvg
-                downChangeAvg = (1-alpha)*downChangeAvg
+                upChangeAvg = (config.avgAlpha*(input[i,0]-lastPrice)) + (1-config.avgAlpha)*upChangeAvg
+                downChangeAvg = (1-config.avgAlpha)*downChangeAvg
             else:
-                downChangeAvg = (alpha * (lastPrice - input[i, 0])) + (1 - alpha) * downChangeAvg
-                upChangeAvg = (1 - alpha) * upChangeAvg
+                downChangeAvg = (config.avgAlpha * (lastPrice - input[i, 0])) + (1 - config.avgAlpha) * downChangeAvg
+                upChangeAvg = (1 - config.avgAlpha) * upChangeAvg
             if(downChangeAvg == 0):
                 RS = 2
             else:
@@ -606,9 +648,9 @@ class LSTM_System:
             RSI_calc = 100 - 100./(1+RS)
             RSI.append(RSI_calc)
 
-            priceAvg = (alpha*input[i,0]) + (1-alpha)*priceAvg
-            ema_ema = (alpha*priceAvg) + (1-alpha)*ema_ema
-            ema_ema_ema = (alpha*ema_ema) + (1-alpha)*ema_ema_ema
+            priceAvg = (config.avgAlpha*input[i,0]) + (1-config.avgAlpha)*priceAvg
+            ema_ema = (config.avgAlpha*priceAvg) + (1-config.avgAlpha)*ema_ema
+            ema_ema_ema = (config.avgAlpha*ema_ema) + (1-config.avgAlpha)*ema_ema_ema
 
             TEMA_calc = 3*priceAvg - 3*ema_ema + ema_ema_ema
             TEMA.append(TEMA_calc)
@@ -630,7 +672,8 @@ class LSTM_System:
         #print(allFeatures.shape)
         #print(allFeatures[0])
 
-        return allFeatures
+        # return allFeatures
+        return input
 
     def backTest(self, stockPrices, normPredicted):
         normPredicted = np.squeeze(normPredicted)
@@ -652,12 +695,12 @@ class LSTM_System:
         return cash + (numStocks*stockPrices[-1])
 
 class config:
-    keep_prob = 0.85
-    input_size = 8
+    keep_prob = 1#0.85
+    input_size = 2
     output_size = 1
-    batch_size = 1
+    batch_size = 512
     init_learning_rate = 0.001
-    learning_rate_decay = 0.99
+    learning_rate_decay = 0.95
     lstm_size = 185
     num_layers = 1
     num_steps = 1
@@ -666,29 +709,34 @@ class config:
     init_epoch = 5
     #TEMP
     max_epoch = 2000
-    train_validation_split = 0.8 # Set to 0 if not running validation
+    train_validation_split = 0 # Set to 0 if not running validation
     early_stopping_continue = 100
+    huber = False
 
     #TESTING
-    sin_data = False
+    sin_data = True
+
 
     #FEATURES
     williams_period = 10
-
-    stock = "MSFT"
+    avgAlpha = 0.2
+    stock = "GOOGL"
 
 def sinData(numSteps):
     time = np.arange(numSteps)
-    time = time/10
+    #time = time/10
     #print(time)
-    list = (np.sin(time) + np.random.normal(0,0.1,size=(len(time))))+np.log(time+2)
+    print(np.sin(np.pi * (time + 0.5)) + np.random.normal(0,0.1,size=(len(time))))
+    list = (np.sin(np.pi * (time + 0.5)) + np.random.normal(0,0.1,size=(len(time))))#+np.log(time+2)
     someNum = np.zeros(shape=list.shape) + np.random.normal(0,0.0001,size=(len(time)))
 
     stacked = np.stack((time, list, someNum), axis=-1)
-    mpl.plot(time, list)
-    mpl.title("Noisy Sine Data")
+    # mpl.plot(time, list)
+    # mpl.title("Noisy Sine Data")
     # mpl.show()
     # mpl.draw()
+    # mpl.gcf().clear()
+    # mpl.close()
     return pd.DataFrame(stacked)
 
 
@@ -708,32 +756,38 @@ if __name__ == "__main__":
 
     errorDict = {}
     #Random search
-    for n in range(50):
+    for n in range(30):
         n = LSTM_System()
-        n.config.num_layers = 2 #np.random.choice(4, p=[0.5, 0.25, 0.125, 0.125]) + 1
+        n.config.num_layers = 3 #np.random.choice(3, p=[0.5, 0.25, 0.25]) + 2
         n.config.batch_size = 1 #np.random.randint(1,300/n.config.num_layers)
         #n.config.num_steps = np.random.randint(1,n.config.batch_size+1)
-        n.config.keep_prob = np.random.uniform(0.3,1)
-        n.config.lstm_size = np.random.randint(1, 512/n.config.num_layers)
-        n.config.init_learning_rate = np.random.uniform(0.0005,0.01)
-        n.config.max_epoch = int(float(1000)/n.config.num_layers)
-        n.config.early_stopping_continue = int(float(100)/n.config.num_layers)
+        n.config.keep_prob = np.random.uniform(0.3,0.8)
+        n.config.lstm_size = np.random.randint(512, 2048)
+        n.config.init_learning_rate = np.random.uniform(0.0005,0.001)
+        n.config.max_epoch = int(float(2000)/n.config.num_layers)
+        n.config.early_stopping_continue = int(float(200)/n.config.num_layers)
+        n.config.williams_period = np.random.randint(10,20)
+        n.config.avgAlpha = np.random.uniform(0.1,0.5)
+        n.config.learning_rate_decay = np.random.uniform(0.96,0.99)
         #Currently just testing microsoft
         #n.config.stock = n._UsedStocks[np.random.randint(0,len(n._UsedStocks))]
 
 
         print("\n\n", n.config.batch_size, n.config.num_steps, n.config.keep_prob, n.config.lstm_size, n.config.num_layers,
-              n.config.init_learning_rate)
+              n.config.init_learning_rate, n.config.williams_period, n.config.avgAlpha, n.config.learning_rate_decay)
         lstm_graph = n.rnn(config=n.config)
         n.train_lstm(lstm_graph, config=n.config)
         errorDict[n.performance] = str(n.config.batch_size)+","+str(n.config.num_steps)+","+str(n.config.keep_prob)+","+\
-                                  str(n.config.lstm_size)+","+str(n.config.num_layers)+","+str(n.config.init_learning_rate)
+                                  str(n.config.lstm_size)+","+str(n.config.num_layers)+","+str(n.config.init_learning_rate)\
+                                   +","+str(n.config.williams_period)+","+str(n.config.avgAlpha)+","+str(n.config.learning_rate_decay)
         print(n.final_loss)
         print("\nDONE\n", n.config.batch_size, n.config.num_steps, n.config.keep_prob, n.config.lstm_size, n.config.num_layers,
-              n.config.init_learning_rate)
+              n.config.init_learning_rate, n.config.williams_period,n.config.avgAlpha)
     keyList = (sorted(list(errorDict.keys()), reverse=True))
-    for i in range(8):
+    for i in range(len(keyList)):
         print(errorDict[keyList[i]], "Directional Accuracy: ", keyList[i])
+    print(np.mean(keyList))
+    print(np.std(keyList))
 
 
     # n = LSTM_System()

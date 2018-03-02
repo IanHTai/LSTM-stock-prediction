@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings(action='ignore', category=UserWarning, module='gensim')
+
 import scipy.stats
 import numpy as np
 from dataExtract.dataExtractor import *
@@ -5,11 +8,15 @@ from gensim.models.doc2vec import Doc2Vec
 from collections import namedtuple, OrderedDict
 from classifier.sentiment.classifiers import Classifier
 from sklearn.naive_bayes import GaussianNB, MultinomialNB
+from sklearn.utils import shuffle
+from sklearn.model_selection import cross_val_score
 from sklearn.linear_model import Perceptron
 import cProfile
 import time
 from copy import deepcopy
 import nltk
+import semiSupervised
+from sklearn.svm import SVC
 
 class GaussianNaiveBayes(Classifier):
     counts = {}
@@ -183,6 +190,39 @@ def getVector(sentence, struct):
             v[keysList.index(word)] += 1
     return v
 
+def doc2Vec(data, train=True, d2v_model=None):
+    analyzedDocument = namedtuple('AnalyzedDocument', 'words tags')
+    docs = []
+    if (train):
+
+        for i, text in enumerate(data):
+            words = text.lower().split()
+            tags = [i]
+            docs.append(analyzedDocument(words, tags))
+
+        model = Doc2Vec(dm=0, size=100, window=10, min_count=5, workers=4, iter=10)
+        model.build_vocab(docs)
+        model.train(docs, total_examples=len(data), epochs=model.iter)
+        newValues = []
+        for input in data:
+            tokens = input.lower().split()
+            fv = np.array(model.infer_vector(tokens), dtype='float64')
+            newValues.append(fv)
+        return np.array(newValues), model
+    else:
+        assert(not (d2v_model == None))
+        for i, text in enumerate(data):
+            words = text.lower().split()
+            tags = [i]
+            docs.append(analyzedDocument(words, tags))
+        newValues = []
+        for input in data:
+            tokens = input.lower().split()
+            fv = np.array(d2v_model.infer_vector(tokens), dtype='float64')
+            newValues.append(fv)
+        return np.array(newValues), d2v_model
+
+
 def getConVoteData(train=True):
     tokens = {}
     if(train):
@@ -195,59 +235,114 @@ def getConVoteData(train=True):
     return values,tokens
 
 if __name__ == '__main__':
+
+    ss = semiSupervised.SemiSupervised()
+    data, labels = ss.getTwitterRaw('../../resources/hydrated_tweets/relevant_tweets.txt')
+
+    # SHUFFLING DATA
+    data, labels = shuffle(data, labels)
+
+    trainPercent = 0.8
+    trainData = data[0:int(trainPercent*len(data))]
+    trainLabels = labels[0:int(trainPercent*len(labels))]
+    assert(len(trainData) == len(trainLabels))
+
+    testData = data[int(trainPercent*len(data)):]
+    testLabels = labels[int(trainPercent*len(labels)):]
+    assert(len(trainData) == len(trainLabels))
+
+    structure = BoWStruct(trainData)
+    trainFV = []
+    for sentence, value in zip(trainData, trainLabels):
+        trainFV.append(getVector(sentence, structure))
+    trainFV = np.array(trainFV)
+
+    testFV = []
+    for sentence, value in zip(testData, testLabels):
+        testFV.append(getVector(sentence, structure))
+    testFV = np.array(testFV)
+
+
+    # Cross Validation for hyperparameter tuning
+    paramDict = {
+    }
+    c_values = [0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100]
+    gamma_values = [0.1, 0.5, 1, 5, 10]
+    kernel = 'rbf'
+
+    for C in c_values:
+        for gamma in gamma_values:
+            BoWSVM = SVC(C=C, kernel=kernel, gamma=gamma)
+            meanScore = np.mean(cross_val_score(BoWSVM, trainFV, trainLabels, cv=10, n_jobs=-1))
+            print(C, gamma, meanScore)
+            paramDict[meanScore] = [C,gamma]
+
+    sortedParams = sorted(list(paramDict.keys()), reverse=True)
+    print(sortedParams)
+    params = paramDict[sortedParams[0]]
+
+    BoWSVM = SVC(C=params[0], kernel='rbf', gamma=params[1])
+    BoWSVM.fit(trainFV, trainLabels)
+
+    BoWNB = MultinomialNB()
+    BoWNB.fit(trainFV, trainLabels)
+
+    print("SVM Score", BoWSVM.score(testFV, testLabels))
+    print("NB Score", BoWNB.score(testFV, testLabels))
+
     '''
     ===================================
     Bag of Words
     ===================================
     '''
-    print('Getting BoW Train Data')
-    trainValues, structure = getConVoteData(train=True)
-    trainFV = []
-    for [sentence, value] in trainValues:
-        trainFV.append([getVector(sentence, structure), value])
-    trainFV = np.array(trainFV)
-    print('Training BoW')
-    BoWNB = NaiveBayes()
-    BoWNB.train(trainFV)
-    testValues, emptyStruct = getConVoteData(train=False)
-    print('Getting BoW Test Data')
-    testFV = []
-    for [sentence, value] in testValues:
-        testFV.append([getVector(sentence, structure), value])
-    testFV = np.array(testFV)
-    print('Testing BoW')
-    print('BoW Accuracy: ', BoWNB.testBatch(testFV))
-
-
-
-
-    '''
-    ===================================
-    Doc2Vec
-    ===================================
-    '''
-    print('Getting Doc2Vec Train Data')
-    nb = GaussianNaiveBayes()
-    print('Training Doc2Vec NB')
-    nb.train(nb.getTrainInputVectors())
-    print('Getting Doc2Vec Test Data')
-    test = nb.getTestInputVectors()
-    currTime = time.time()
-    print('Testing Doc2Vec')
-    print('Accuracy: ', nb.testBatch(test))
-    '''
-    
-    ===================================
-    Test against SKLearn's classifiers
-    ===================================
-    
-    '''
-    trainSet = nb.getTrainInputVectors()
-
-    gnb = GaussianNB()
-    gnb.fit(list(trainSet[:,0]), trainSet[:,1])
-    print('SKL Gaussian NB score: ', gnb.score(list(test[:,0]), test[:,1]))
-
-    perc = Perceptron(max_iter=1000)
-    perc.fit(list(trainSet[:,0]), trainSet[:,1])
-    print('SKL Perceptron score: ', perc.score(list(test[:,0]), test[:,1]))
+    # print('Getting BoW Train Data')
+    # trainValues, structure = getConVoteData(train=True)
+    # trainFV = []
+    # for [sentence, value] in trainValues:
+    #     trainFV.append([getVector(sentence, structure), value])
+    # trainFV = np.array(trainFV)
+    # print('Training BoW')
+    # BoWNB = NaiveBayes()
+    # BoWNB.train(trainFV)
+    # testValues, emptyStruct = getConVoteData(train=False)
+    # print('Getting BoW Test Data')
+    # testFV = []
+    # for [sentence, value] in testValues:
+    #     testFV.append([getVector(sentence, structure), value])
+    # testFV = np.array(testFV)
+    # print('Testing BoW')
+    # print('BoW Accuracy: ', BoWNB.testBatch(testFV))
+    #
+    #
+    #
+    #
+    # '''
+    # ===================================
+    # Doc2Vec
+    # ===================================
+    # '''
+    # print('Getting Doc2Vec Train Data')
+    # nb = GaussianNaiveBayes()
+    # print('Training Doc2Vec NB')
+    # nb.train(nb.getTrainInputVectors())
+    # print('Getting Doc2Vec Test Data')
+    # test = nb.getTestInputVectors()
+    # currTime = time.time()
+    # print('Testing Doc2Vec')
+    # print('Accuracy: ', nb.testBatch(test))
+    # '''
+    #
+    # ===================================
+    # Test against SKLearn's classifiers
+    # ===================================
+    #
+    # '''
+    # trainSet = nb.getTrainInputVectors()
+    #
+    # gnb = GaussianNB()
+    # gnb.fit(list(trainSet[:,0]), trainSet[:,1])
+    # print('SKL Gaussian NB score: ', gnb.score(list(test[:,0]), test[:,1]))
+    #
+    # perc = Perceptron(max_iter=1000)
+    # perc.fit(list(trainSet[:,0]), trainSet[:,1])
+    # print('SKL Perceptron score: ', perc.score(list(test[:,0]), test[:,1]))

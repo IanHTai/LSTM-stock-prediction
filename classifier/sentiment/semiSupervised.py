@@ -70,18 +70,20 @@ class SemiSupervised:
             for line in combined:
                 splitLine = line.rstrip('\n').split('\t')
                 if len(splitLine) == 4:
-                    if (splitLine[3] == '-1'):
-                        sentences.append(splitLine[2])
-                        labels.append(-1)
-                    elif (splitLine[3] == 'neg'):
-                        sentences.append(splitLine[2])
-                        labels.append(0)
-                    elif (splitLine[3] == 'neutral'):
-                        sentences.append(splitLine[2])
-                        labels.append(5)
-                    elif (splitLine[3] == 'pos'):
-                        sentences.append(splitLine[2])
-                        labels.append(10)
+                    # if (splitLine[3] == '-1'):
+                    #     sentences.append(splitLine[2])
+                    #     labels.append(-1)
+                    # elif (splitLine[3] == 'neg'):
+                    #     sentences.append(splitLine[2])
+                    #     labels.append(0)
+                    # elif (splitLine[3] == 'neutral'):
+                    #     sentences.append(splitLine[2])
+                    #     labels.append(5)
+                    # elif (splitLine[3] == 'pos'):
+                    #     sentences.append(splitLine[2])
+                    #     labels.append(10)
+                    sentences.append(splitLine[2])
+                    labels.append(splitLine[3])
         return np.array(sentences), np.array(labels)
 
 
