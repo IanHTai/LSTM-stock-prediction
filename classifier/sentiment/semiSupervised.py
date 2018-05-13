@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.model_selection import GridSearchCV
 import random
 from featureGen.sentimentFeatures import SentimentFeatures
+from datetime import datetime
 
 class SemiSupervised:
     def getD2VTrainVectors(self, combinedPath):
@@ -66,6 +67,8 @@ class SemiSupervised:
     def getTwitterRaw(self, combinedPath):
         sentences = []
         labels = []
+        dates = []
+        datetime_format = "%Y-%m-%d %H:%M:%S"
         with open(combinedPath, 'r') as combined:
             for line in combined:
                 splitLine = line.rstrip('\n').split('\t')
@@ -82,9 +85,10 @@ class SemiSupervised:
                     # elif (splitLine[3] == 'pos'):
                     #     sentences.append(splitLine[2])
                     #     labels.append(10)
+                    dates.append(datetime.strptime(splitLine[0], datetime_format))
                     sentences.append(splitLine[2])
                     labels.append(splitLine[3])
-        return np.array(sentences), np.array(labels)
+        return np.array(dates), np.array(sentences), np.array(labels)
 
 
 def getXORDataset(numUnlabelled, numLabelled):
@@ -141,7 +145,7 @@ if __name__ == '__main__':
     #data,unlab = ss.getD2VTrainVectors('../../resources/hydrated_tweets/small_data/Combined_subsampled_Dev.txt')
 
     sf = SentimentFeatures()
-    rawdata,unlab = ss.getTwitterRaw('../../resources/hydrated_tweets/small_data/Combined_subsampled_Dev.txt')
+    dates, rawdata, unlab = ss.getTwitterRaw('../../resources/hydrated_tweets/small_data/Combined_subsampled_Dev.txt')
     print('Number of unique words: ', len(sf.POSStruct(rawdata)))
     data = []
     for sentence in rawdata:
@@ -155,7 +159,7 @@ if __name__ == '__main__':
     #print(gridsearch.cv_results_)
     #print('model fitted')
     #testData = ss.getD2VTestVectors('../../resources/hydrated_tweets/small_data/Test_Dev.txt')
-    testDataRaw, testLabels = ss.getTwitterRaw('../../resources/hydrated_tweets/small_data/Test_Dev.txt')
+    dates , testDataRaw, testLabels = ss.getTwitterRaw('../../resources/hydrated_tweets/small_data/Test_Dev.txt')
     testData = []
     for sentence in testDataRaw:
         testData.append(sf.genAdjVec(sentence))

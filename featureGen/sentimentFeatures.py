@@ -1,4 +1,4 @@
-from classifier.sentiment.naiveBayes import BoWStruct, getVector
+#from classifier.sentiment.naiveBayes import BoWStruct, getVector
 import numpy as np
 from collections import OrderedDict
 import nltk
@@ -9,6 +9,9 @@ from nltk.corpus import wordnet as wn
 
 #nltk.download()
 class SentimentFeatures:
+    """
+    Deprecated
+    """
     # FeatureVector Length
     FVLength = 6
     #def __init__(self):
