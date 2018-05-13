@@ -8,7 +8,11 @@ import csv
 import random
 
 usernames = [
-    'AJEnglish',
+    'Reuters'
+]
+
+"""
+'AJEnglish',
     'ABCPolitics',
     'AP',
     'AP_Politics',
@@ -45,7 +49,7 @@ usernames = [
     'cnni',
     'CNNSitRoom',
     'arstechnica',
-]
+"""
 
 numColumns_labelled = 4
 
@@ -55,30 +59,49 @@ translateDict = {
     '1':'pos'
 }
 
+keyWords = [
+    'aapl',
+    'apple',
+    'microsoft',
+    'msft',
+    'google',
+    'googl',
+    'goog',
+    'alphabet',
+    'amazon',
+    'amzn'
+]
+
 ascii = set(string.printable)
 
 
 def filterASCII(sentence):
     return ''.join(filter(lambda x: x in ascii, sentence))
-def getFromServer():
+def getFromServer(fileName):
     pattern = re.compile(r"http\S+|pic\.twitter\.com\S+|tus\/\d\S+|http[s]?\/\/[www\.]?twitter\.com\S+\s\d+")
     delchars = str.maketrans(dict.fromkeys(''.join(c for c in map(chr, range(256)) if not (c.isalnum() or c.isspace()))))
 
-    with open('../resources/hydrated_tweets/EnglishFilterBatch.txt', 'a', encoding='utf-8') as dump:
+    with open(fileName, 'a', encoding='utf-8') as dump:
         for user in usernames:
             timeBefore = time.time()
             print('[%s]' %(datetime.now().isoformat(sep=' ')), ' Getting: ', user)
-            tweetCriteria = manager.TweetCriteria().setUsername(user).setSince("2015-10-03")
+            tweetCriteria = manager.TweetCriteria().setUsername(user).setSince("2017-06-20").setUntil("2017-12-01")
             tweets = manager.TweetManager.getTweets(tweetCriteria)
             print('Time took for: %s ' %(user), time.time() - timeBefore)
             print('Num of Tweets: ', len(tweets))
             for tweet in tweets:
+                textToWrite = filterASCII(re.sub('\d{6,}$', '',
+                                                 pattern.sub("", tweet.text.replace(':// ', '://')).translate(
+                                                     delchars).lower().strip()))
+                if not (any(substring in textToWrite for substring in keyWords)):
+                    continue
+
                 dump.write(tweet.date.isoformat(sep=' '))
                 dump.write('\t')
                 dump.write(user)
                 dump.write('\t')
 
-                textToWrite = filterASCII(re.sub('\d{6,}$', '', pattern.sub("", tweet.text.replace(':// ', '://')).translate(delchars).lower().strip()))
+
                 dump.write(textToWrite)
                 dump.write('\n')
 
@@ -167,4 +190,7 @@ if __name__ == '__main__':
     subSample(5000, '../resources/hydrated_tweets/TwitterData_v3.txt', subFileName)
 
     combineData('../resources/hydrated_tweets/FilteredSubsampled_TwitterData_v3.txt', subFileName, '../resources/hydrated_tweets/small_data/Combined_subsampled_Dev.txt')'''
-    subSample(100, '../resources/hydrated_tweets/TwitterData_v3.txt', '../resources/hydrated_tweets/small_data/Test_Dev.txt')
+
+    #subSample(100, '../resources/hydrated_tweets/TwitterData_v3.txt', '../resources/hydrated_tweets/small_data/Test_Dev.txt')
+
+    getFromServer('../resources/hydrated_tweets/relevant_tweets.txt')
