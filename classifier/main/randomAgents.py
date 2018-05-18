@@ -23,6 +23,7 @@ def calcPerformance(lstm, loss, acc):
 
     randomPerf = []
 
+    #REMEMBER TO REVERT BACK TO 5000
     for i in range(0, 5000):
         stdev = random.gauss(1, 0.3)
         r = randomAgent(stdev, scaledFeats)
@@ -30,18 +31,21 @@ def calcPerformance(lstm, loss, acc):
 
         MSE = np.square(preds - targets).mean()
 
-        last = lstm.test_X[0, 0, 0]
         numCorrect = 0
         total = len(targets)
         assert(len(preds) == len(targets))
         for i in range(0, len(targets)):
+            last = lstm.test_X[i, 0, 0]
             if (np.sign(preds[i] - last) == np.sign(targets[i] - last)):
                 numCorrect += 1
-            last = targets[i]
-        randomPerf.append([MSE, float(numCorrect)/float(total)])
 
+        randomPerf.append(np.array([MSE, float(numCorrect)/float(total)]))
+
+    randomPerf = np.array(randomPerf)
     r = martingale(scaledFeats)
     preds = r.predictions()
+
+
     MSE = np.square(preds - targets).mean()
     assert (len(preds) == len(targets))
     martingalePerf = MSE
@@ -55,4 +59,4 @@ def calcPerformance(lstm, loss, acc):
         if acc > randomPerf[i][1]:
             numBetterAcc += 1
 
-    return numBetterLoss, numBetterAcc, totalNum, martingalePerf
+    return numBetterLoss, numBetterAcc, totalNum, martingalePerf, randomPerf[:,0].mean(), np.std(randomPerf[:,0]), randomPerf[:,1].mean(), np.std(randomPerf[:,1])
