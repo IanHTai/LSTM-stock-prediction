@@ -3,18 +3,13 @@ warnings.filterwarnings(action='ignore', category=UserWarning, module='gensim')
 
 import scipy.stats
 import numpy as np
+from sklearn.utils import shuffle
 from dataExtract.dataExtractor import *
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 from collections import namedtuple, OrderedDict
 from classifier.sentiment.classifiers import Classifier
 from sklearn.naive_bayes import GaussianNB, MultinomialNB
-from sklearn.utils import shuffle
 from sklearn.model_selection import cross_val_score
-from sklearn.linear_model import Perceptron
-import cProfile
-import time
-from copy import deepcopy
-import nltk
 from classifier.sentiment import semiSupervised
 from sklearn.svm import SVC
 import bisect
@@ -124,7 +119,7 @@ class GaussianNaiveBayes(Classifier):
         logprobs = self.calcLogClassProbabilities(summaries, sentence)
         return max(logprobs, key=logprobs.get)
 
-class NaiveBayes(GaussianNaiveBayes):
+class MultinomialNaiveBayes(GaussianNaiveBayes):
     def predict(self, summaries, sentence):
         logprobs = self.calcLogClassProbabilities(summaries, sentence)
         return max(logprobs, key=logprobs.get)
@@ -197,20 +192,17 @@ def doc2Vec(data, train=True, d2v_model=None, epochs=16):
     analyzedDocument = namedtuple('AnalyzedDocument', 'words tags')
     docs = []
     if (train):
-
+        shuffle(data)
         for i, text in enumerate(data):
             words = text.lower().split()
             tags = [i]
             docs.append(TaggedDocument(words, tags))
             #docs.append(analyzedDocument(words, tags))
 
-        model = Doc2Vec(size=100, window=10, min_count=2, workers=4, alpha=0.025, min_alpha=0.025)
+        model = Doc2Vec(size=100, window=10, min_count=2, workers=4, alpha=0.025)
         docLen = len(docs)
         model.build_vocab(docs)
-        for epoch in range(epochs):
-            model.train(docs, docLen, epochs=1)
-            model.alpha -= 0.002  # decrease the learning rate
-            model.min_alpha = model.alpha  # fix the learning rate, no decay
+        model.train(docs, docLen, epochs=epochs)
 
         newValues = []
         for input in data:
@@ -247,7 +239,7 @@ def getConVoteData(train=True):
 
 
 
-def getSentiClassifier(lastTrainDate=None, newTraining=False):
+def getSentiClassifier(lastTrainDate=None, newTraining=False, shuffleData=False, testShuffled=False):
     """
     Gets the best scoring sentiment classifier
     :param lastTrainDate: The date signifying the test/train boundary in data
@@ -263,7 +255,8 @@ def getSentiClassifier(lastTrainDate=None, newTraining=False):
     labels = np.flip(labels, 0)
 
     # SHUFFLING DATA
-    # data, labels = shuffle(data, labels)
+    if shuffleData:
+        data, labels = shuffle(data, labels)
     defaultTrainProportion = 0.8
     if lastTrainDate == None:
         point = int(defaultTrainProportion*len(data))
@@ -308,10 +301,10 @@ def getSentiClassifier(lastTrainDate=None, newTraining=False):
     c_values = [0.1, 0.5, 1, 5, 10, 50, 100]
     gamma_values = [0.01, 0.05, 0.1, 0.5, 1, 5, 10]
     kernel = 'rbf'
-    d2vEpochs = [1024, 32]
+    d2vEpochs = [64, 32]
 
 
-    if(newTraining):
+    if(newTraining and not testShuffled):
         for C in [1,5,10]:
             # TEMP
             for gamma in [0.05,0.1,0.5]:
@@ -342,11 +335,54 @@ def getSentiClassifier(lastTrainDate=None, newTraining=False):
         testD2Vecs, model = doc2Vec(testData, train=False, d2v_model=model)
 
 
-
         D2VSVM = SVC(C=D2VParams[0], kernel='rbf', gamma=D2VParams[1])
         D2VSVM.fit(trainD2Vecs, trainLabels)
 
         BoWSVM = SVC(C=BoWParams[0], kernel='rbf', gamma=BoWParams[1])
+        BoWSVM.fit(trainFV, trainLabels)
+
+        BoWNB = MultinomialNB()
+        BoWNB.fit(trainFV, trainLabels)
+
+        D2VNB = GaussianNB()
+        D2VNB.fit(trainD2Vecs, trainLabels)
+
+        print("D2V SVM Score", D2VSVM.score(testD2Vecs, testLabels))
+        print("BoW SVM Score", BoWSVM.score(testFV, testLabels))
+        print("BoW NB Score", BoWNB.score(testFV, testLabels))
+        print("D2V NB Score", D2VNB.score(testD2Vecs, testLabels))
+
+        scores = {
+            D2VSVM.score(testD2Vecs, testLabels): 'D2VSVM',
+            BoWSVM.score(testFV, testLabels): 'BoWSVM',
+            BoWNB.score(testFV, testLabels): 'BoWNB',
+            D2VNB.score(testD2Vecs, testLabels): 'D2VNB'
+        }
+        sortedScores = collections.OrderedDict(sorted(scores.items(), key=lambda t: t[0]))
+        best = sortedScores.popitem(last=False)[1]
+
+
+
+        if best == 'D2VSVM':
+            return dates, data, np.concatenate([trainD2Vecs, testD2Vecs]), D2VSVM
+
+        elif best == 'BoWSVM':
+            return dates, data, np.concatenate([trainFV, testFV]), BoWSVM
+
+        elif best == 'BoWNB':
+            return dates, data, np.concatenate([trainFV, testFV]), BoWNB
+
+        elif best == 'D2VNB':
+            return dates, data, np.concatenate([trainD2Vecs, testD2Vecs]), D2VNB
+
+    elif testShuffled and newTraining:
+        trainD2Vecs, model = doc2Vec(trainData, train=True, d2v_model=None, epochs=64)
+        testD2Vecs, model = doc2Vec(testData, train=False, d2v_model=model)
+
+        D2VSVM = SVC(C=50, kernel='rbf', gamma=5)
+        D2VSVM.fit(trainD2Vecs, trainLabels)
+
+        BoWSVM = SVC(C=10, kernel='rbf', gamma=0.05)
         BoWSVM.fit(trainFV, trainLabels)
 
         BoWNB = MultinomialNB()
@@ -398,67 +434,61 @@ def getSentiClassifier(lastTrainDate=None, newTraining=False):
         gamma = 0.05
         BoWSVM = SVC(C=C, kernel='rbf', gamma=gamma)
         BoWSVM.fit(trainFV, trainLabels)
+
+        # dict of dates and classified labels of relevant tweets to each company
+        separated = {
+            'AAPL': [],
+            'AMZN': [],
+            'GOOG': [],
+            'GOOGL': [],
+            'MSFT': []
+        }
+        AAPLKeyWords = ['aapl', 'apple']
+        AMZNKeyWords = ['amzn', 'amazon']
+        GOOGKeyWords = ['goog', 'alphabet', 'google']
+        GOOGLKeyWords = ['googl', 'alphabet', 'google']
+        MSFTKeyWords = ['msft', 'microsoft']
+
+        for i in range(0, len(testData)):
+            if any(substring in testData[i] for substring in AAPLKeyWords):
+                separated['AAPL'].append([testFV[i], testLabels[i]])
+            if any(substring in testData[i] for substring in AMZNKeyWords):
+                separated['AMZN'].append([testFV[i], testLabels[i]])
+            if any(substring in testData[i] for substring in GOOGKeyWords):
+                separated['GOOG'].append([testFV[i], testLabels[i]])
+            if any(substring in testData[i] for substring in GOOGLKeyWords):
+                separated['GOOGL'].append([testFV[i], testLabels[i]])
+            if any(substring in testData[i] for substring in MSFTKeyWords):
+                separated['MSFT'].append([testFV[i], testLabels[i]])
+
+        with open("sentiResults.txt", "w") as sentiFile:
+            for stock in separated.keys():
+                arr = separated[stock]
+                print(stock, "Senti Results ===========================")
+                sentiFile.write(stock + "Senti Results ===========================\n")
+                sentiFile.write("Number of Tweets: " + str(len(arr)) + "\n")
+                print("Number of Tweets: ", str(len(arr)))
+                arr = np.array(arr)
+                labels = list(arr[:,1])
+
+                FVs = arr[:,0]
+                newFVs = []
+                for fv in FVs:
+                    newFVs.append(list(fv))
+
+                assert(len(newFVs) == len(labels))
+
+                score = BoWSVM.score(newFVs, labels)
+
+                sentiFile.write("Score: " + str(score) + "\n")
+                print("Score: ", score)
+                sentiFile.write("\n\n")
+                print()
+
+
         return dates, data, np.concatenate([trainFV, testFV]), BoWSVM
 
 
 
-
-    '''
-    ===================================
-    Bag of Words
-    ===================================
-    '''
-    # print('Getting BoW Train Data')
-    # trainValues, structure = getConVoteData(train=True)
-    # trainFV = []
-    # for [sentence, value] in trainValues:
-    #     trainFV.append([getVector(sentence, structure), value])
-    # trainFV = np.array(trainFV)
-    # print('Training BoW')
-    # BoWNB = NaiveBayes()
-    # BoWNB.train(trainFV)
-    # testValues, emptyStruct = getConVoteData(train=False)
-    # print('Getting BoW Test Data')
-    # testFV = []
-    # for [sentence, value] in testValues:
-    #     testFV.append([getVector(sentence, structure), value])
-    # testFV = np.array(testFV)
-    # print('Testing BoW')
-    # print('BoW Accuracy: ', BoWNB.testBatch(testFV))
-    #
-    #
-    #
-    #
-    # '''
-    # ===================================
-    # Doc2Vec
-    # ===================================
-    # '''
-    # print('Getting Doc2Vec Train Data')
-    # nb = GaussianNaiveBayes()
-    # print('Training Doc2Vec NB')
-    # nb.train(nb.getTrainInputVectors())
-    # print('Getting Doc2Vec Test Data')
-    # test = nb.getTestInputVectors()
-    # currTime = time.time()
-    # print('Testing Doc2Vec')
-    # print('Accuracy: ', nb.testBatch(test))
-    # '''
-    #
-    # ===================================
-    # Test against SKLearn's classifiers
-    # ===================================
-    #
-    # '''
-    # trainSet = nb.getTrainInputVectors()
-    #
-    # gnb = GaussianNB()
-    # gnb.fit(list(trainSet[:,0]), trainSet[:,1])
-    # print('SKL Gaussian NB score: ', gnb.score(list(test[:,0]), test[:,1]))
-    #
-    # perc = Perceptron(max_iter=1000)
-    # perc.fit(list(trainSet[:,0]), trainSet[:,1])
-    # print('SKL Perceptron score: ', perc.score(list(test[:,0]), test[:,1]))
-
 if __name__ == '__main__':
-    getSentiClassifier()
+    getSentiClassifier(newTraining=True, shuffleData=True, testShuffled=True, lastTrainDate=datetime.strptime('2017-11-01 13:35:00', "%Y-%m-%d %H:%M:%S"))
